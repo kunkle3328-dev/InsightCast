@@ -1,0 +1,5 @@
+{
+  "name": "AI Podcast Studio",
+  "description": "A NotebookLM-style application where two AI hosts engage in a podcast-style discussion based on user-provided topics and source materials.",
+  "requestFramePermissions": []
+}
