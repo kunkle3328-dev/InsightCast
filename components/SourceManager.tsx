@@ -1,5 +1,7 @@
 import React, { useState, useCallback } from 'react';
+// Fix: Correct import path by providing content for types.ts
 import { Source, SourceType } from '../types';
+// Fix: Correct import path by providing content for icons.tsx
 import { PlusIcon, DocumentIcon, LinkIcon, PDFIcon, LoadingSpinnerIcon } from './icons';
 
 // Make pdfjsLib globally available

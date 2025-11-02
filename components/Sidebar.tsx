@@ -1,9 +1,18 @@
 import React from 'react';
-import { Source } from '../types';
+import { Source, Voice, VoiceTier } from '../types';
 import { SourceManager } from './SourceManager';
-import { LogoIcon, AlexIcon, BenIcon } from './icons';
+import { LogoIcon, AlexIcon, BenIcon, CreditCardIcon, SparklesIcon } from './icons';
 
-const VOICES = ['Zephyr', 'Charon', 'Kore', 'Puck', 'Fenrir'];
+const VOICES: Voice[] = [
+    { name: 'Zephyr', tier: 'Standard' },
+    { name: 'Puck', tier: 'Standard' },
+    { name: 'Charon', tier: 'Standard' },
+    { name: 'Kore', tier: 'Standard' },
+    { name: 'Fenrir', tier: 'Standard' },
+    { name: 'Aura', tier: 'Premium' },
+    { name: 'Nexus', tier: 'Premium' },
+    { name: 'Orion', tier: 'Premium' },
+];
 
 interface SidebarProps {
   sources: Source[];
@@ -14,6 +23,8 @@ interface SidebarProps {
   benVoice: string;
   onAlexVoiceChange: (voice: string) => void;
   onBenVoiceChange: (voice: string) => void;
+  credits: number;
+  onNavigateToStore: () => void;
 }
 
 const VoiceSelector: React.FC<{
@@ -33,12 +44,37 @@ const VoiceSelector: React.FC<{
       className="w-full bg-black/30 border border-cyan-500/30 rounded-md p-2 text-gray-200 focus:ring-2 focus:ring-cyan-400 focus:border-cyan-400 transition"
       aria-label={`Select voice for ${label}`}
     >
-      {VOICES.map(voice => (
-        <option key={voice} value={voice} className="bg-gray-800 text-white">
-          {voice}
-        </option>
-      ))}
+      <optgroup label="Standard Voices" className="bg-gray-800">
+        {VOICES.filter(v => v.tier === 'Standard').map(voice => (
+          <option key={voice.name} value={voice.name} className="bg-gray-800 text-white">
+            {voice.name}
+          </option>
+        ))}
+      </optgroup>
+      <optgroup label="Premium Voices" className="bg-gray-800">
+        {VOICES.filter(v => v.tier === 'Premium').map(voice => (
+          <option key={voice.name} value={voice.name} className="bg-gray-800 text-yellow-300 font-semibold">
+            {voice.name} ✨
+          </option>
+        ))}
+      </optgroup>
     </select>
+  </div>
+);
+
+const CreditDisplay: React.FC<{ credits: number; onGetMore: () => void }> = ({ credits, onGetMore }) => (
+  <div>
+    <h3 className="text-lg font-semibold text-gray-300 mb-3 text-shadow-cyan">Credits</h3>
+    <div className="p-4 bg-cyan-500/5 border border-cyan-500/20 rounded-lg space-y-3">
+        <div className="flex justify-between items-center">
+            <span className="text-gray-400">Available Credits:</span>
+            <span className="font-bold text-xl text-white">{credits.toLocaleString()}</span>
+        </div>
+        <button onClick={onGetMore} className="w-full flex items-center justify-center space-x-2 px-4 py-2 bg-cyan-600/50 text-cyan-200 rounded-md hover:bg-cyan-600 transition">
+            <CreditCardIcon className="w-5 h-5"/>
+            <span>Get More Credits</span>
+        </button>
+    </div>
   </div>
 );
 
@@ -50,7 +86,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   alexVoice,
   benVoice,
   onAlexVoiceChange,
-  onBenVoiceChange
+  onBenVoiceChange,
+  credits,
+  onNavigateToStore,
 }) => {
   return (
     <>
@@ -67,7 +105,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
         </div>
         <div className="flex-1 p-4 overflow-y-auto">
-          <div className="space-y-4">
+          <div className="space-y-6">
+            <CreditDisplay credits={credits} onGetMore={onNavigateToStore} />
             <div>
               <h3 className="text-lg font-semibold text-gray-300 mb-3 text-shadow-cyan">Voice Configuration</h3>
               <div className="space-y-4 p-4 bg-cyan-500/5 border border-cyan-500/20 rounded-lg">

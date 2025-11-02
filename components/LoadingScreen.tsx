@@ -1,4 +1,5 @@
 import React from 'react';
+// Fix: Correct import path by providing content for icons.tsx
 import { LogoIcon } from './icons';
 
 export const LoadingScreen: React.FC = () => (

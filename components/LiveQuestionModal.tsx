@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+// Fix: Correct import path by providing content for icons.tsx
 import { LoadingSpinnerIcon, MicIcon, SendIcon } from './icons';
 
 interface LiveQuestionModalProps {

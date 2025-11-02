@@ -1,6 +1,8 @@
 import React from 'react';
+// Fix: Correct import path by providing content for types.ts
 import { ChatMessage, Speaker } from '../types';
 import { Message } from './Message';
+// Fix: Correct import path by providing content for icons.tsx
 import { LogoIcon, PlayIcon, StopIcon, LoadingSpinnerIcon, MicIcon } from './icons';
 import { PodcastLoadingIndicator } from './PodcastLoadingIndicator';
 import { AudioVisualizer } from './AudioVisualizer';

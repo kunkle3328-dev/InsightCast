@@ -1,5 +1,7 @@
 import React, { useRef, useEffect } from 'react';
+// Fix: Correct import path by providing content for types.ts
 import { ChatMessage, Speaker } from '../types';
+// Fix: Correct import path by providing content for icons.tsx
 import { AlexIcon, BenIcon, UserIcon, PlayIcon, PauseIcon, LoadingSpinnerIcon } from './icons';
 
 interface MessageProps {

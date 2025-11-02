@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+// Fix: Correct import path by providing content for icons.tsx
 import { SendIcon } from './icons';
 
 interface InputBarProps {

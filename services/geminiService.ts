@@ -1,4 +1,5 @@
 import { GoogleGenAI, Type, Modality } from "@google/genai";
+// Fix: Correct import path by providing content for types.ts
 import { ChatMessage, Speaker } from "../types";
 
 const API_KEY = process.env.API_KEY;
