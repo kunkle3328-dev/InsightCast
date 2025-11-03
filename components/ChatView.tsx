@@ -1,10 +1,9 @@
+
 import React from 'react';
-// Fix: Correct import path by providing content for types.ts
 import { ChatMessage, Speaker } from '../types';
 import { Message } from './Message';
-// Fix: Correct import path by providing content for icons.tsx
 import { LogoIcon, PlayIcon, StopIcon, LoadingSpinnerIcon, MicIcon } from './icons';
-import { PodcastLoadingIndicator } from './PodcastLoadingIndicator';
+import { GenerationProgressIndicator } from './GenerationProgressIndicator';
 import { AudioVisualizer } from './AudioVisualizer';
 
 interface ChatViewProps {
@@ -20,13 +19,17 @@ interface ChatViewProps {
   frequencyData: Uint8Array | null;
   onAskLiveQuestion: () => void;
   setMessageRef: (id: string, el: HTMLDivElement | null) => void;
+  generationStage: 'script' | 'synthesis';
+  synthesisProgress: { completed: number; total: number; };
+  onHighlightSource: (sourceId: string | null) => void;
+  onCitationClick: (sourceId: string, quote: string) => void;
 }
 
 const WelcomeMessage: React.FC = () => (
   <div className="flex flex-col items-center justify-center h-full text-center">
-    <LogoIcon className="w-24 h-24 text-cyan-400/50" />
-    <h2 className="mt-6 text-2xl font-bold text-gray-300 text-shadow-cyan">Welcome to AI Podcast Studio</h2>
-    <p className="mt-2 text-lg text-gray-400 max-w-md">
+    <LogoIcon className="w-24 h-24 text-[var(--text-accent-primary)]/50" />
+    <h2 className="mt-6 text-2xl font-bold text-[var(--text-primary)] text-shadow-primary">Welcome to AI Podcast Studio</h2>
+    <p className="mt-2 text-lg text-[var(--text-secondary)] max-w-md">
       Add a source from the sidebar, then ask a question below to start a conversation with our AI hosts, ALEX & BEN.
     </p>
   </div>
@@ -42,7 +45,7 @@ const PlaybackControls: React.FC<{
         <button
             onClick={onPlayClick}
             disabled={isLoading}
-            className="flex items-center justify-center space-x-3 px-6 py-3 bg-cyan-600 text-white font-semibold rounded-full shadow-lg hover:bg-cyan-500 disabled:bg-gray-600 disabled:cursor-not-allowed transition-all duration-200 ease-in-out transform hover:scale-105 hover:shadow-[0_0_15px_theme(colors.cyan.500)] disabled:shadow-none"
+            className="flex items-center justify-center space-x-3 px-6 py-3 bg-[var(--bg-accent-primary)] text-white font-semibold rounded-full shadow-lg hover:bg-[var(--bg-accent-primary-hover)] disabled:bg-[var(--bg-disabled)] disabled:cursor-not-allowed transition-all duration-200 ease-in-out transform hover:scale-105 hover:shadow-[0_0_15px_var(--shadow-color-accent)] disabled:shadow-none"
         >
             {isLoading ? (
                 <>
@@ -64,7 +67,7 @@ const PlaybackControls: React.FC<{
         {isPlaying && (
             <button
                 onClick={onAskClick}
-                className="flex items-center justify-center space-x-2 px-4 py-2 bg-indigo-600 text-white font-semibold rounded-full shadow-lg hover:bg-indigo-500 transition-all duration-200 ease-in-out transform hover:scale-105 hover:shadow-[0_0_15px_theme(colors.indigo.500)] animate-pulse"
+                className="flex items-center justify-center space-x-2 px-4 py-2 bg-[var(--bg-accent-secondary)] text-white font-semibold rounded-full shadow-lg hover:bg-[var(--bg-accent-secondary)]/80 transition-all duration-200 ease-in-out transform hover:scale-105 hover:shadow-[0_0_15px_var(--shadow-color-secondary)] animate-pulse"
                 title="Ask a live question"
             >
                 <MicIcon className="w-5 h-5" />
@@ -73,7 +76,6 @@ const PlaybackControls: React.FC<{
         )}
     </div>
 );
-
 
 export const ChatView: React.FC<ChatViewProps> = ({ 
     messages, 
@@ -88,6 +90,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
     frequencyData,
     onAskLiveQuestion,
     setMessageRef,
+    generationStage,
+    synthesisProgress,
+    onHighlightSource,
+    onCitationClick,
 }) => {
   const hasPodcastContent = messages.some(m => m.speaker === Speaker.Alex || m.speaker === Speaker.Ben);
 
@@ -121,10 +127,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
             isAudioLoading={isAudioLoadingId === msg.id}
             isHighlighted={highlightedMessageId === msg.id}
             isPodcastPlaying={isPodcastPlaying}
+            onHighlightSource={onHighlightSource}
+            onCitationClick={onCitationClick}
           />
         ))}
         {isLoading && (
-            <PodcastLoadingIndicator />
+            <GenerationProgressIndicator 
+                stage={generationStage} 
+                progress={synthesisProgress} 
+            />
         )}
       </div>
     </div>

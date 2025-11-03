@@ -7,10 +7,11 @@ import AdminLogin from './components/AdminLogin';
 import CreditStore from './components/CreditStore';
 import { useAuth } from './hooks/useAuth';
 import { useUserData } from './hooks/useUserData';
+import { ThemeProvider } from './contexts/ThemeContext';
 
 type View = 'landing' | 'studio' | 'admin_login' | 'admin_dashboard' | 'credit_store';
 
-function App() {
+const ThemedApp: React.FC = () => {
   const [initializing, setInitializing] = useState(true);
   const [currentView, setCurrentView] = useState<View>('landing');
   const { isAdminLoggedIn, login, logout } = useAuth();
@@ -67,9 +68,17 @@ function App() {
   };
   
   return (
-    <div className="bg-grid min-h-screen bg-[#050510] text-gray-200 font-sans">
+    <div className="bg-grid min-h-screen bg-[var(--bg-main)] text-[var(--text-primary)] font-sans transition-colors duration-300">
       {renderView()}
     </div>
+  );
+}
+
+function App() {
+  return (
+    <ThemeProvider>
+      <ThemedApp />
+    </ThemeProvider>
   );
 }
 

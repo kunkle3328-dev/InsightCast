@@ -32,14 +32,14 @@ export const InputBar: React.FC<InputBarProps> = ({ onSendMessage, isLoading }) 
         onChange={(e) => setPrompt(e.target.value)}
         onKeyDown={handleKeyDown}
         placeholder="Ask a question or start a topic..."
-        className="w-full bg-black/30 border border-cyan-500/30 rounded-lg p-4 pr-16 text-gray-200 resize-none focus:ring-2 focus:ring-cyan-400 focus:border-cyan-400 transition-shadow shadow-lg"
+        className="w-full bg-[var(--bg-surface-2)] border border-[var(--border-secondary)] rounded-lg p-4 pr-16 text-[var(--text-primary)] resize-none focus:ring-2 focus:ring-[var(--border-accent)] focus:border-[var(--border-accent)] transition-shadow shadow-lg"
         rows={1}
         disabled={isLoading}
       />
       <button
         type="submit"
         disabled={isLoading || !prompt.trim()}
-        className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-full bg-cyan-600 text-white disabled:bg-gray-600 disabled:cursor-not-allowed hover:bg-cyan-500 transition-all transform hover:scale-110 shadow-[0_0_10px_theme(colors.cyan.500)] disabled:shadow-none"
+        className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-full bg-[var(--bg-accent-primary)] text-white disabled:bg-[var(--bg-disabled)] disabled:cursor-not-allowed hover:bg-[var(--bg-accent-primary-hover)] transition-all transform hover:scale-110 shadow-[0_0_10px_var(--shadow-color-accent)] disabled:shadow-none"
         aria-label="Send message"
       >
         <SendIcon className="w-5 h-5" />
