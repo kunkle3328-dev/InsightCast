@@ -3,6 +3,19 @@
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { ChatMessage, Speaker, Source, SourceIntel } from "../types";
 
+export interface LiveConversationMessage {
+    role: 'user' | 'assistant';
+    content: string;
+}
+
+export interface LiveConversationResponse {
+    reply: string;
+    suggestedFollowUps: string[];
+    highlights: string[];
+    vibe: string;
+    status: string;
+}
+
 // Fix: Per SDK guidelines, API key must be read from process.env.API_KEY and not stored in a variable.
 if (!process.env.API_KEY) {
   throw new Error("API_KEY environment variable not set");
@@ -221,6 +234,75 @@ export const answerLiveQuestion = async (
   } catch (error) {
     console.error("Error answering live question from Gemini API:", error);
     throw new Error("Failed to generate a live answer.");
+  }
+};
+
+
+const liveModeSystemInstruction = `You are Gemini Live, a multimodal, real-time conversation partner. You respond instantly, keep the tone warm and concise, and proactively surface relevant follow-up ideas from the wider Gemini platform.
+
+Return a JSON object with the following fields:
+- "reply": A natural language response (max ~120 words) that continues the live conversation.
+- "suggestedFollowUps": 2-4 short follow-up prompts the user could tap next.
+- "highlights": 2-3 bullet points summarizing new insights the user just gained.
+- "vibe": A compact description of your current speaking style (e.g., "Curious & encouraging").
+- "status": A short label describing the session state (e.g., "Listening", "Processing", "Responding").
+
+Do not include any additional commentary outside of the JSON payload.`;
+
+const liveResponseSchema = {
+  type: Type.OBJECT,
+  properties: {
+    reply: { type: Type.STRING },
+    suggestedFollowUps: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+    },
+    highlights: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+    },
+    vibe: { type: Type.STRING },
+    status: { type: Type.STRING },
+  },
+  required: ['reply'],
+};
+
+export const sendLiveTurn = async (
+  history: LiveConversationMessage[],
+  userInput: string
+): Promise<LiveConversationResponse> => {
+  const trimmedHistory = history.slice(-12);
+  const transcript = trimmedHistory
+    .map(entry => `${entry.role === 'assistant' ? 'Gemini' : 'User'}: ${entry.content}`)
+    .join('\n');
+
+  const conversationPrompt = `Conversation transcript so far:\n${transcript || 'No prior conversation yet.'}\n\nThe user just said: "${userInput}"\n\nProvide the JSON payload described in the instructions.`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.0-flash',
+      contents: conversationPrompt,
+      config: {
+        systemInstruction: liveModeSystemInstruction,
+        responseMimeType: 'application/json',
+        responseSchema: liveResponseSchema,
+        temperature: 0.7,
+        thinkingConfig: { thinkingBudget: 0 },
+      },
+    });
+
+    const payload = JSON.parse(response.text.trim());
+
+    return {
+      reply: payload.reply || '',
+      suggestedFollowUps: Array.isArray(payload.suggestedFollowUps) ? payload.suggestedFollowUps : [],
+      highlights: Array.isArray(payload.highlights) ? payload.highlights : [],
+      vibe: typeof payload.vibe === 'string' ? payload.vibe : 'Calm & present',
+      status: typeof payload.status === 'string' ? payload.status : 'Responding',
+    };
+  } catch (error) {
+    console.error('Error generating live response from Gemini API:', error);
+    throw new Error('Failed to generate live response.');
   }
 };
 

@@ -1,652 +1,509 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Sidebar } from './Sidebar';
-import { ChatView } from './ChatView';
-import { InputBar } from './InputBar';
-import { LiveQuestionModal } from './LiveQuestionModal';
-import { CreditModal } from './CreditModal';
-import { ScriptEditor } from './ScriptEditor';
-import { PodcastOverview } from './PodcastOverview';
-import { SourceViewer } from './SourceViewer';
-import { ChatMessage, Source, Speaker, Voice, VOICES } from '../types';
-import { generatePodcast, answerLiveQuestion, generateSpeech, generateSummary, generateKeyTakeaways, refineScript, generateSourceIntel } from '../services/geminiService';
-import { decode, decodeAudioData } from '../utils/audioUtils';
-import { INTRO_MUSIC_BASE64, OUTRO_MUSIC_BASE64 } from '../utils/audioAssets';
-import { useCredits } from '../hooks/useCredits';
-import { MenuIcon, XIcon } from './icons';
-
-const SAMPLE_RATE = 24000;
-const NUM_CHANNELS = 1;
-const PODCAST_GENERATION_COST = 10;
-const PREMIUM_VOICE_COST_ADDON = 5;
-
-type StudioView = 'conversation' | 'notebook' | 'overview';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  LogoIcon,
+  MicIcon,
+  PauseIcon,
+  PlayIcon,
+  MessageSquareIcon,
+  SendIcon,
+  ChartBarIcon,
+  UsersIcon,
+  ServerIcon,
+} from './icons';
+import {
+  LiveConversationMessage,
+  sendLiveTurn,
+} from '../services/geminiService';
 
 interface StudioProps {
-    onNavigate: (view: 'credit_store') => void;
+  onNavigate: (view: 'credit_store') => void;
 }
 
-const TabButton: React.FC<{ label: string; isActive: boolean; onClick: () => void; }> = ({ label, isActive, onClick }) => (
-    <button
-        onClick={onClick}
-        className={`px-4 py-2 text-sm font-semibold rounded-t-lg border-b-2 transition-colors ${
-            isActive
-                ? 'text-[var(--text-accent-primary)] border-[var(--border-accent)] bg-[var(--bg-surface-1)]'
-                : 'text-[var(--text-secondary)] border-transparent hover:text-[var(--text-primary)]'
-        }`}
+type ConversationMessage = LiveConversationMessage & { id: string };
+
+type SessionMetric = {
+  title: string;
+  value: string;
+  caption: string;
+  icon: React.ComponentType<React.SVGProps<SVGSVGElement>>;
+};
+
+const DEFAULT_SUGGESTIONS = [
+  'Summarize the latest breakthroughs',
+  'Explain it like I am in a rush',
+  'Show me something visual',
+  'What should I ask next?',
+];
+
+const DEFAULT_HIGHLIGHTS = [
+  'Real-time responses tuned to your vibe',
+  'Hands-free mic controls for live follow-ups',
+  'Automatic highlights build your recap as you talk',
+];
+
+const INITIAL_ASSISTANT_MESSAGE: ConversationMessage = {
+  id: 'welcome',
+  role: 'assistant',
+  content:
+    "Hey, I'm Gemini Live. Ask me anything and I’ll respond in real time with context-aware insights.",
+};
+
+const MessageBubble: React.FC<{
+  message: ConversationMessage;
+  isAssistant: boolean;
+  isStreaming?: boolean;
+}> = ({ message, isAssistant, isStreaming }) => (
+  <div
+    className={`group flex gap-4 ${
+      isAssistant ? 'items-start' : 'items-start justify-end flex-row-reverse'
+    }`}
+  >
+    <div
+      className={`mt-1 h-9 w-9 flex-shrink-0 rounded-full border border-white/10 bg-white/10 backdrop-blur-lg flex items-center justify-center ${
+        isAssistant ? 'shadow-[0_0_20px_rgba(92,225,230,0.35)] text-cyan-300' : 'text-white'
+      }`}
     >
-        {label}
-    </button>
+      {isAssistant ? 'G' : 'You'}
+    </div>
+    <div
+      className={`max-w-3xl rounded-3xl border px-5 py-4 text-sm leading-relaxed shadow-lg transition-all duration-300 ${
+        isAssistant
+          ? 'border-cyan-400/20 bg-[rgba(16,33,61,0.65)] text-slate-100 backdrop-blur-xl'
+          : 'border-white/10 bg-white/10 text-white backdrop-blur-lg'
+      }`}
+    >
+      <p className={`whitespace-pre-wrap text-base ${isStreaming ? 'live-streaming-text' : ''}`}>
+        {message.content}
+      </p>
+      {isAssistant && (
+        <div className="mt-3 flex items-center gap-2 text-xs uppercase tracking-widest text-cyan-200/70 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
+          <span className="inline-flex h-1.5 w-1.5 rounded-full bg-cyan-400 animate-pulse" />
+          Gemini Live Response
+        </div>
+      )}
+    </div>
+  </div>
 );
 
-interface ProjectData {
-  sources: Source[];
-  savedClips: ChatMessage[];
-  finalScript: ChatMessage[];
-}
+const StreamingBubble: React.FC<{ content: string }> = ({ content }) => (
+  <div className="flex items-start gap-4">
+    <div className="mt-1 h-9 w-9 flex-shrink-0 rounded-full border border-white/10 bg-white/10 backdrop-blur-lg flex items-center justify-center text-cyan-300 shadow-[0_0_20px_rgba(92,225,230,0.35)]">
+      G
+    </div>
+    <div className="max-w-3xl rounded-3xl border border-cyan-400/20 bg-[rgba(16,33,61,0.65)] px-5 py-4 text-sm leading-relaxed text-slate-100 shadow-lg backdrop-blur-xl">
+      <p className="live-streaming-text whitespace-pre-wrap text-base">{content || '…'}</p>
+    </div>
+  </div>
+);
 
-export const Studio: React.FC<StudioProps> = ({ onNavigate }) => {
-  const [sources, setSources] = useState<Source[]>([]);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [activeView, setActiveView] = useState<StudioView>('conversation');
-  
-  // Source viewer state
-  const [activeSourceId, setActiveSourceId] = useState<string | null>(null);
-  const [highlightedQuote, setHighlightedQuote] = useState<string | null>(null);
-  const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
+export const Studio: React.FC<StudioProps> = () => {
+  const [messages, setMessages] = useState<ConversationMessage[]>([INITIAL_ASSISTANT_MESSAGE]);
+  const [inputValue, setInputValue] = useState('');
+  const [suggestions, setSuggestions] = useState<string[]>(DEFAULT_SUGGESTIONS);
+  const [highlights, setHighlights] = useState<string[]>(DEFAULT_HIGHLIGHTS);
+  const [sessionStatus, setSessionStatus] = useState('Listening');
+  const [sessionVibe, setSessionVibe] = useState('Curious & encouraging');
+  const [micActive, setMicActive] = useState(true);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [pendingAssistant, setPendingAssistant] = useState<string | null>(null);
+  const [streamedAssistantText, setStreamedAssistantText] = useState('');
+  const [isStreaming, setIsStreaming] = useState(false);
 
-  // Script Editor / Notebook State
-  const [savedClips, setSavedClips] = useState<ChatMessage[]>([]);
-  const [finalScript, setFinalScript] = useState<ChatMessage[]>([]);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
-  // Credits
-  const { credits, deductCredits, isLoading: isCreditsLoading } = useCredits();
-  const [isCreditModalOpen, setIsCreditModalOpen] = useState(false);
-
-  // Voice selection
-  const [alexVoice, setAlexVoice] = useState('zephyr');
-  const [benVoice, setBenVoice] = useState('puck');
-
-  // Loading states
-  const [isLoading, setIsLoading] = useState(false);
-  const [generationStage, setGenerationStage] = useState<'script' | 'synthesis'>('script');
-  const [synthesisProgress, setSynthesisProgress] = useState({ completed: 0, total: 0 });
-  const [isPodcastLoading, setIsPodcastLoading] = useState(false);
-  const [isAudioLoadingId, setIsAudioLoadingId] = useState<string | null>(null);
-  const [isLiveQuestionModalOpen, setIsLiveQuestionModalOpen] = useState(false);
-  const [isLiveQuestionLoading, setIsLiveQuestionLoading] = useState(false);
-  
-  // Playback
-  const [isPodcastPlaying, setIsPodcastPlaying] = useState(false);
-  const [currentlyPlayingId, setCurrentlyPlayingId] = useState<string | null>(null);
-  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
-  
-  // Summary & Overview
-  const [summary, setSummary] = useState('');
-  const [isSummaryLoading, setIsSummaryLoading] = useState(false);
-  const [keyTakeaways, setKeyTakeaways] = useState<string[]>([]);
-  const [isTakeawaysLoading, setIsTakeawaysLoading] = useState(false);
-  const [isRefining, setIsRefining] = useState(false);
-
-
-  // Refs
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const sourceNodesRef = useRef<Map<string, AudioBufferSourceNode>>(new Map());
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const frequencyDataRef = useRef<Uint8Array | null>(null);
-  const animationFrameIdRef = useRef<number | null>(null);
-  const messageRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
-  const playbackQueueRef = useRef<ChatMessage[]>([]);
-  const currentPlaybackIndexRef = useRef<number>(0);
-  const resumeAfterIdRef = useRef<string | null>(null);
-  const introMusicBufferRef = useRef<AudioBuffer | null>(null);
-  const outroMusicBufferRef = useRef<AudioBuffer | null>(null);
-  const isPlayingRef = useRef(isPodcastPlaying);
+  const metrics: SessionMetric[] = useMemo(
+    () => [
+      {
+        title: 'Participants',
+        value: '1 : 1',
+        caption: 'You & Gemini Live',
+        icon: UsersIcon,
+      },
+      {
+        title: 'Latency',
+        value: isProcessing || isStreaming ? '~280 ms' : '~120 ms',
+        caption: 'Edge optimized',
+        icon: ServerIcon,
+      },
+      {
+        title: 'Insights logged',
+        value: `${Math.max(3, highlights.length)}`,
+        caption: 'Auto-saved to recap',
+        icon: ChartBarIcon,
+      },
+    ],
+    [highlights.length, isProcessing, isStreaming]
+  );
 
   useEffect(() => {
-    isPlayingRef.current = isPodcastPlaying;
-  }, [isPodcastPlaying]);
-
-
-  useEffect(() => {
-    if (!audioContextRef.current) {
-        try {
-            const context = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: SAMPLE_RATE });
-            audioContextRef.current = context;
-
-            const analyser = context.createAnalyser();
-            analyser.fftSize = 256;
-            const bufferLength = analyser.frequencyBinCount;
-            frequencyDataRef.current = new Uint8Array(bufferLength);
-            analyser.connect(context.destination);
-            analyserRef.current = analyser;
-            
-            const loadMusicAssets = async () => {
-                if (!context) return;
-                try {
-                    const introData = decode(INTRO_MUSIC_BASE64).buffer;
-                    introMusicBufferRef.current = await context.decodeAudioData(introData);
-                    const outroData = decode(OUTRO_MUSIC_BASE64).buffer;
-                    outroMusicBufferRef.current = await context.decodeAudioData(outroData);
-                } catch (error) {
-                    console.error("Failed to decode music assets:", error);
-                }
-            };
-            loadMusicAssets();
-
-        } catch (e) {
-            console.error("Web Audio API is not supported in this browser.", e);
-        }
+    if (!pendingAssistant) {
+      return;
     }
+
+    let cancelled = false;
+    const reply = pendingAssistant;
+    setIsStreaming(true);
+    setStreamedAssistantText('');
+
+    const interval = window.setInterval(() => {
+      setStreamedAssistantText(current => {
+        if (cancelled) {
+          return current;
+        }
+        const nextLength = current.length + 3;
+        const nextText = reply.slice(0, nextLength);
+        if (nextText.length >= reply.length) {
+          clearInterval(interval);
+          if (!cancelled) {
+            setMessages(prev => [
+              ...prev,
+              {
+                id: `assistant-${Date.now()}`,
+                role: 'assistant',
+                content: reply,
+              },
+            ]);
+            setIsStreaming(false);
+            setStreamedAssistantText('');
+            setPendingAssistant(null);
+          }
+        }
+        return nextText;
+      });
+    }, 18);
+
     return () => {
-        if (animationFrameIdRef.current) {
-            cancelAnimationFrame(animationFrameIdRef.current);
-        }
+      cancelled = true;
+      window.clearInterval(interval);
     };
-  }, []);
-
-  const setMessageRef = useCallback((id: string, el: HTMLDivElement | null) => {
-    if (el) {
-        messageRefs.current.set(id, el);
-    } else {
-        messageRefs.current.delete(id);
-    }
-  }, []);
-
-    const visualizeAudio = useCallback(() => {
-        if (!isPlayingRef.current || !analyserRef.current || !frequencyDataRef.current) {
-            if (animationFrameIdRef.current) cancelAnimationFrame(animationFrameIdRef.current);
-            return;
-        };
-        analyserRef.current.getByteFrequencyData(frequencyDataRef.current);
-        setCurrentlyPlayingId(prev => prev);
-        animationFrameIdRef.current = requestAnimationFrame(visualizeAudio);
-    }, []);
-
-    useEffect(() => {
-        if (isPodcastPlaying) {
-            animationFrameIdRef.current = requestAnimationFrame(visualizeAudio);
-        } else {
-            if (animationFrameIdRef.current) {
-                cancelAnimationFrame(animationFrameIdRef.current);
-            }
-        }
-        return () => {
-            if (animationFrameIdRef.current) cancelAnimationFrame(animationFrameIdRef.current);
-        }
-    }, [isPodcastPlaying, visualizeAudio]);
+  }, [pendingAssistant]);
 
   useEffect(() => {
-    const synthesizeNewMessages = async () => {
-        if (audioContextRef.current?.state === 'suspended') {
-            return;
-        }
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, streamedAssistantText, isStreaming]);
 
-        const aiMessages = messages.filter(
-            m => (m.speaker === Speaker.Alex || m.speaker === Speaker.Ben) && !m.audioBuffer
-        );
-
-        if (aiMessages.length > 0) {
-            setSynthesisProgress(prev => ({ ...prev, total: prev.total + aiMessages.length }));
-
-            for (const msg of aiMessages) {
-                if (msg.audioBuffer) continue;
-                
-                setIsAudioLoadingId(msg.id);
-                try {
-                    const voiceName = msg.speaker === Speaker.Alex ? alexVoice : benVoice;
-                    const base64Audio = await generateSpeech(msg.text, voiceName);
-                    const audioData = decode(base64Audio);
-                    if (audioContextRef.current) {
-                        const audioBuffer = await decodeAudioData(audioData, audioContextRef.current, SAMPLE_RATE, NUM_CHANNELS);
-                        setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, audioBuffer } : m));
-                    }
-                } catch (error) {
-                    console.error(`Failed to synthesize audio for message ${msg.id}`, error);
-                } finally {
-                    setSynthesisProgress(prev => ({ ...prev, completed: prev.completed + 1 }));
-                }
-            }
-             setIsAudioLoadingId(null);
-        } else if (isLoading && generationStage === 'synthesis') {
-            setIsLoading(false);
-        }
-    };
-
-    synthesizeNewMessages();
-  }, [messages, alexVoice, benVoice, isLoading, generationStage]);
-
-  const stopPodcastPlayback = useCallback(() => {
-    sourceNodesRef.current.forEach(source => source.stop());
-    sourceNodesRef.current.clear();
-    setIsPodcastPlaying(false);
-    setCurrentlyPlayingId(null);
-    setHighlightedMessageId(null);
-  }, []);
-  
-const playSequence = useCallback(async () => {
-    if (currentPlaybackIndexRef.current >= playbackQueueRef.current.length) {
-        if (isPlayingRef.current && outroMusicBufferRef.current && audioContextRef.current) {
-            setHighlightedMessageId(null);
-            const outroSource = audioContextRef.current.createBufferSource();
-            outroSource.buffer = outroMusicBufferRef.current;
-            outroSource.connect(analyserRef.current!);
-            outroSource.onended = () => {
-                sourceNodesRef.current.delete('outro-music');
-                stopPodcastPlayback();
-            };
-            outroSource.start();
-            sourceNodesRef.current.set('outro-music', outroSource);
-        } else {
-            stopPodcastPlayback();
-        }
-        return;
-    }
-
-    let message = playbackQueueRef.current[currentPlaybackIndexRef.current];
-    
-    if (!message.audioBuffer) {
-        setIsAudioLoadingId(message.id);
-        try {
-            if (!audioContextRef.current) throw new Error("AudioContext is not available");
-            if (audioContextRef.current.state === 'suspended') await audioContextRef.current.resume();
-            
-            const voiceName = message.speaker === Speaker.Alex ? alexVoice : benVoice;
-            const base64Audio = await generateSpeech(message.text, voiceName);
-            const audioData = decode(base64Audio);
-            const audioBuffer = await decodeAudioData(audioData, audioContextRef.current, SAMPLE_RATE, NUM_CHANNELS);
-
-            const updatedMessage = { ...message, audioBuffer };
-            setMessages(prev => prev.map(m => m.id === message.id ? updatedMessage : m));
-            playbackQueueRef.current[currentPlaybackIndexRef.current] = updatedMessage;
-            message = updatedMessage;
-        } catch (error) {
-            console.error(`JIT Synthesis failed for message ${message.id}:`, error);
-            stopPodcastPlayback();
-            return;
-        } finally {
-            setIsAudioLoadingId(null);
-        }
-    }
-    
-    if (!message?.audioBuffer || !audioContextRef.current) {
-        currentPlaybackIndexRef.current++;
-        await playSequence();
-        return;
-    }
-    
-    setHighlightedMessageId(message.id);
-    const messageEl = messageRefs.current.get(message.id);
-    messageEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-
-    const source = audioContextRef.current.createBufferSource();
-    source.buffer = message.audioBuffer;
-    source.connect(analyserRef.current!);
-    
-    source.onended = () => {
-        sourceNodesRef.current.delete(message.id);
-        if (isPlayingRef.current) {
-            currentPlaybackIndexRef.current++;
-            playSequence();
-        }
-    };
-
-    source.start();
-    sourceNodesRef.current.set(message.id, source);
-}, [stopPodcastPlayback, alexVoice, benVoice]);
-
-const handlePlayFullPodcast = useCallback(async (startAfterId: string | null = null) => {
-    if (isPodcastPlaying) {
-        stopPodcastPlayback();
-        return;
-    }
-
-    if (!audioContextRef.current) return;
-    if (audioContextRef.current.state === 'suspended') {
-        await audioContextRef.current.resume();
-    }
-
-    setIsPodcastPlaying(true);
-    const allMessages = messages.filter(m => m.speaker === Speaker.Alex || m.speaker === Speaker.Ben);
-    
-    let startIndex = 0;
-    if (startAfterId) {
-        const resumeIndex = allMessages.findIndex(m => m.id === startAfterId);
-        if (resumeIndex !== -1) {
-            startIndex = resumeIndex + 1;
-        }
-    }
-
-    if (startIndex >= allMessages.length && allMessages.length > 0) {
-        if (outroMusicBufferRef.current) {
-            const outroSource = audioContextRef.current.createBufferSource();
-            outroSource.buffer = outroMusicBufferRef.current;
-            outroSource.connect(analyserRef.current!);
-            outroSource.onended = () => stopPodcastPlayback();
-            outroSource.start();
-            sourceNodesRef.current.set('outro-music', outroSource);
-        } else {
-            stopPodcastPlayback();
-        }
-        return;
-    }
-
-    playbackQueueRef.current = allMessages;
-    currentPlaybackIndexRef.current = startIndex;
-
-    if (startIndex === 0 && introMusicBufferRef.current) {
-        const introSource = audioContextRef.current.createBufferSource();
-        introSource.buffer = introMusicBufferRef.current;
-        introSource.connect(analyserRef.current!);
-        introSource.onended = () => {
-            sourceNodesRef.current.delete('intro-music');
-            if (isPlayingRef.current) {
-                playSequence();
-            }
-        };
-        introSource.start();
-        sourceNodesRef.current.set('intro-music', introSource);
-    } else {
-        playSequence();
-    }
-}, [messages, isPodcastPlaying, stopPodcastPlayback, playSequence]);
-  
-    const handleSendMessage = async (prompt: string) => {
-    const alexVoiceData = VOICES.find(v => v.name === alexVoice);
-    const benVoiceData = VOICES.find(v => v.name === benVoice);
-    let currentCost = PODCAST_GENERATION_COST;
-    if (alexVoiceData?.tier === 'Premium' || benVoiceData?.tier === 'Premium') {
-        currentCost += PREMIUM_VOICE_COST_ADDON;
-    }
-    
-    if (credits < currentCost) {
-        setIsCreditModalOpen(true);
-        return;
-    }
-    
-    if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
-        await audioContextRef.current.resume();
-    }
-    
-    stopPodcastPlayback();
-    setIsLoading(true);
-    setMessages([]);
-    setSummary('');
-    setKeyTakeaways([]);
-    setSavedClips([]);
-    setFinalScript([]);
-    setActiveSourceId(null);
-    setGenerationStage('script');
-    setSynthesisProgress({ completed: 0, total: 0 });
-
-    const userMessage: ChatMessage = { id: `user-${Date.now()}`, speaker: Speaker.User, text: prompt };
-    setMessages([userMessage]);
-    
-    try {
-      const podcastMessages = await generatePodcast(prompt, sources);
-      deductCredits(currentCost);
-
-      setGenerationStage('synthesis');
-      setMessages(prev => [...prev, ...podcastMessages]);
-    } catch (error) {
-      console.error("Failed to generate podcast:", error);
-      setIsLoading(false);
-    }
+  const handleTextareaResize = (element: HTMLTextAreaElement) => {
+    element.style.height = 'auto';
+    element.style.height = `${Math.min(element.scrollHeight, 180)}px`;
   };
 
-  const handleSubmitLiveQuestion = async (question: string) => {
-    setIsLiveQuestionLoading(true);
+  const handleSendMessage = async (rawValue?: string) => {
+    const text = (rawValue ?? inputValue).trim();
+    if (!text || isProcessing) {
+      return;
+    }
+
+    const userMessage: ConversationMessage = {
+      id: `user-${Date.now()}`,
+      role: 'user',
+      content: text,
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+    setInputValue('');
+    if (inputRef.current) {
+      inputRef.current.value = '';
+      handleTextareaResize(inputRef.current);
+    }
+    setIsProcessing(true);
+    setSessionStatus('Processing');
+
     try {
-        const introMessage: ChatMessage = {
-            id: `live-q-intro-${Date.now()}`,
-            speaker: Speaker.Ben,
-            text: "Hold on, it looks like we have a live question coming in...",
-        };
-        const questionMessage: ChatMessage = {
-            id: `live-q-user-${Date.now()}`,
-            speaker: Speaker.Alex,
-            text: `The question is: "${question}"`,
-        };
+      const history: LiveConversationMessage[] = [...messages, userMessage].map(({ role, content }) => ({
+        role,
+        content,
+      }));
+      const liveResponse = await sendLiveTurn(history, text);
 
-        const answerMessage = await answerLiveQuestion(messages, question, sources);
-        
-        const playingMessageIndex = messages.findIndex(m => m.id === highlightedMessageId);
-        const insertionIndex = playingMessageIndex !== -1 ? playingMessageIndex + 1 : messages.length;
-        
-        const newMessages = [...messages];
-        newMessages.splice(insertionIndex, 0, introMessage, questionMessage, answerMessage);
-
-        resumeAfterIdRef.current = answerMessage.id;
-        
-        setMessages(newMessages);
-
+      if (liveResponse.suggestedFollowUps.length) {
+        setSuggestions(liveResponse.suggestedFollowUps);
+      }
+      if (liveResponse.highlights.length) {
+        setHighlights(liveResponse.highlights);
+      }
+      setSessionVibe(liveResponse.vibe || 'Curious & encouraging');
+      setSessionStatus(liveResponse.status || 'Responding');
+      setPendingAssistant(liveResponse.reply || '');
     } catch (error) {
-        console.error("Failed to handle live question:", error);
+      console.error(error);
+      setSessionStatus('Reconnecting…');
+      setPendingAssistant('I hit a snag on my end. Give me a second and feel free to try again.');
     } finally {
-        setIsLiveQuestionLoading(false);
-        setIsLiveQuestionModalOpen(false);
+      setIsProcessing(false);
     }
   };
-  
-    const handleInitiateLiveQuestion = () => {
-        resumeAfterIdRef.current = highlightedMessageId;
-        stopPodcastPlayback();
-        setIsLiveQuestionModalOpen(true);
-    };
 
-    const handleGenerateSummary = async () => {
-        setIsSummaryLoading(true);
-        try {
-            const result = await generateSummary(messages.filter(m => m.speaker !== Speaker.User));
-            setSummary(result);
-        } catch (error) {
-            console.error("Failed to generate summary", error);
-        } finally {
-            setIsSummaryLoading(false);
-        }
-    };
+  const handleSuggestionClick = (suggestion: string) => {
+    handleSendMessage(suggestion);
+  };
 
-    const handleGenerateTakeaways = async () => {
-      setIsTakeawaysLoading(true);
-      try {
-          const takeaways = await generateKeyTakeaways(messages.filter(m => m.speaker !== Speaker.User));
-          setKeyTakeaways(takeaways);
-      } catch (error) {
-          console.error("Failed to generate key takeaways", error);
-      } finally {
-          setIsTakeawaysLoading(false);
-      }
-    };
+  const handleKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> = event => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      handleSendMessage();
+    }
+  };
 
-    const handleRefineScript = async (instruction: string) => {
-        setIsRefining(true);
-        try {
-            const refined = await refineScript(finalScript, instruction);
-            const refinedWithIds = refined.map((item, index) => ({
-                ...item,
-                id: `refined-${Date.now()}-${index}`,
-                speaker: item.speaker === 'ALEX' ? Speaker.Alex : Speaker.Ben,
-            }));
-            setFinalScript(refinedWithIds);
-        } catch (error) {
-            console.error("Error refining script", error);
-        } finally {
-            setIsRefining(false);
-        }
-    };
-
-    const handleCitationClick = (sourceId: string, quote: string) => {
-        setActiveSourceId(sourceId);
-        setHighlightedQuote(quote);
-    };
-    
-    const handleImportProject = (data: ProjectData) => {
-      if (
-        Array.isArray(data.sources) &&
-        Array.isArray(data.savedClips) &&
-        Array.isArray(data.finalScript)
-      ) {
-        stopPodcastPlayback();
-        setSources(data.sources);
-        setSavedClips(data.savedClips);
-        setFinalScript(data.finalScript);
-        setMessages([]);
-        setSummary('');
-        setKeyTakeaways([]);
-        setActiveSourceId(null);
-        setActiveView('notebook');
-        // A toast notification would be better here in a real app
-        alert('Project imported successfully!');
-      } else {
-        alert('Invalid project file format.');
-      }
-    };
-
-    const handleAddSource = async (sourceData: Omit<Source, 'id' | 'intel' | 'isIntelLoading'>) => {
-        const newSource: Source = {
-            ...sourceData,
-            id: `source-${Date.now()}`,
-            isIntelLoading: true,
-        };
-        setSources(prev => [...prev, newSource]);
-
-        try {
-            const intel = await generateSourceIntel(newSource.content);
-            setSources(prev => prev.map(s => 
-                s.id === newSource.id ? { ...s, intel, isIntelLoading: false } : s
-            ));
-        } catch (error) {
-            console.error("Failed to generate intel for source:", newSource.id, error);
-            // still set loading to false on error so it doesn't spin forever
-            setSources(prev => prev.map(s => 
-                s.id === newSource.id ? { ...s, isIntelLoading: false } : s
-            ));
-        }
-    };
-
-    const activeSource = sources.find(s => s.id === activeSourceId);
+  const toggleMic = () => {
+    setMicActive(prev => !prev);
+  };
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      <Sidebar 
-        sources={sources}
-        onAddSource={handleAddSource}
-        onRemoveSource={(id) => {
-            setSources(prev => prev.filter(s => s.id !== id));
-            if (activeSourceId === id) setActiveSourceId(null);
-        }}
-        onViewSource={(id) => setActiveSourceId(id)}
-        activeSourceId={activeSourceId}
-        highlightedSourceId={highlightedSourceId}
-        isOpen={isSidebarOpen}
-        onToggle={() => setIsSidebarOpen(!isSidebarOpen)}
-        alexVoice={alexVoice}
-        benVoice={benVoice}
-        onAlexVoiceChange={setAlexVoice}
-        onBenVoiceChange={setBenVoice}
-        credits={isCreditsLoading ? 0 : credits}
-        onNavigateToStore={() => onNavigate('credit_store')}
-        onImportProject={handleImportProject}
-      />
-      <main className={`flex-1 flex flex-col relative bg-[var(--bg-main)] transition-all duration-300 ease-in-out`}>
-         <button onClick={() => setIsSidebarOpen(true)} className={`absolute top-4 left-4 z-30 p-2 rounded-md hover:bg-[var(--bg-accent-primary)]/20 text-[var(--text-accent-primary)] md:hidden ${isSidebarOpen ? 'hidden' : 'block'}`} aria-label="Open sidebar">
-             <MenuIcon className="w-6 h-6" />
-        </button>
-        
-        <div className="border-b border-[var(--border-primary)] px-6 pt-2">
-            <div className="flex space-x-2">
-                <TabButton label="Conversation" isActive={activeView === 'conversation'} onClick={() => setActiveView('conversation')} />
-                <TabButton label="Notebook" isActive={activeView === 'notebook'} onClick={() => setActiveView('notebook')} />
-                <TabButton label="Podcast Overview" isActive={activeView === 'overview'} onClick={() => setActiveView('overview')} />
+    <div className="relative min-h-screen overflow-hidden bg-[#04050f] text-white">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(69,226,243,0.12),transparent_55%),radial-gradient(circle_at_80%_0%,rgba(142,97,255,0.18),transparent_50%),radial-gradient(circle_at_50%_80%,rgba(255,115,161,0.14),transparent_55%)]" />
+      <div className="pointer-events-none absolute inset-y-0 left-1/2 hidden w-px -translate-x-1/2 bg-gradient-to-b from-transparent via-white/10 to-transparent lg:block" />
+
+      <div className="relative z-10 flex min-h-screen flex-col">
+        <header className="flex flex-col gap-6 px-8 pb-6 pt-10 lg:flex-row lg:items-center lg:justify-between">
+          <div className="space-y-4">
+            <div className="flex items-center gap-4">
+              <div className="rounded-2xl border border-white/10 bg-white/5 p-3 backdrop-blur-xl">
+                <LogoIcon className="h-7 w-7 text-cyan-200" />
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.35em] text-white/60">Gemini Live</p>
+                <h1 className="text-3xl font-semibold text-white sm:text-4xl">Conversational Studio</h1>
+              </div>
             </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-6 md:p-8">
-          <div className="max-w-4xl mx-auto">
-             {activeView === 'conversation' && (
-                <ChatView 
-                    messages={messages}
-                    isLoading={isLoading}
-                    onPlayPause={() => {}}
-                    currentlyPlayingId={currentlyPlayingId}
-                    isAudioLoadingId={isAudioLoadingId}
-                    onPlayFullPodcast={() => handlePlayFullPodcast(resumeAfterIdRef.current)}
-                    isPodcastPlaying={isPodcastPlaying}
-                    isPodcastLoading={isPodcastLoading}
-                    highlightedMessageId={highlightedMessageId}
-                    frequencyData={frequencyDataRef.current}
-                    onAskLiveQuestion={handleInitiateLiveQuestion}
-                    setMessageRef={setMessageRef}
-                    generationStage={generationStage}
-                    synthesisProgress={synthesisProgress}
-                    onHighlightSource={setHighlightedSourceId}
-                    onCitationClick={handleCitationClick}
-                />
-             )}
-             {activeView === 'notebook' && (
-                <ScriptEditor
-                    messages={messages}
-                    savedClips={savedClips}
-                    finalScript={finalScript}
-                    onSaveClip={(c) => setSavedClips(p => p.find(pc => pc.id === c.id) ? p : [...p, c])}
-                    onRemoveClip={(id) => {
-                        setSavedClips(p => p.filter(c => c.id !== id));
-                        setFinalScript(p => p.filter(c => c.id !== id));
-                    }}
-                    onUpdateFinalScript={setFinalScript}
-                    onRefineScript={handleRefineScript}
-                    isRefining={isRefining}
-                />
-             )}
-             {activeView === 'overview' && (
-                 <PodcastOverview
-                    script={messages.filter(m => m.speaker !== Speaker.User)}
-                    summary={summary}
-                    isSummaryLoading={isSummaryLoading}
-                    onGenerateSummary={handleGenerateSummary}
-                    keyTakeaways={keyTakeaways}
-                    isTakeawaysLoading={isTakeawaysLoading}
-                    onGenerateTakeaways={handleGenerateTakeaways}
-                    sources={sources}
-                    savedClips={savedClips}
-                    finalScript={finalScript}
-                 />
-             )}
+            <p className="max-w-2xl text-base text-white/70">
+              A near-clone of Google’s Gemini Live interface. Switch on your mic, speak naturally, and get multimodal responses, follow-ups, and live highlights without missing a beat.
+            </p>
+            <div className="flex flex-wrap items-center gap-4 text-sm text-white/70">
+              <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 backdrop-blur-xl">
+                <span className="relative flex h-2.5 w-2.5">
+                  <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping" />
+                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-400" />
+                </span>
+                Connected to Gemini Edge
+              </div>
+              <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 backdrop-blur-xl">
+                <PlayIcon className="h-4 w-4 text-rose-300" />
+                Live Session
+              </div>
+              <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 backdrop-blur-xl">
+                <MessageSquareIcon className="h-4 w-4 text-cyan-200" />
+                {messages.length} turns processed
+              </div>
+            </div>
           </div>
-        </div>
-        
-        <div className="p-4 md:p-6 bg-[var(--bg-surface-glass)]/50 backdrop-blur-sm border-t border-[var(--border-primary)]">
-          <div className="max-w-4xl mx-auto">
-            <InputBar onSendMessage={handleSendMessage} isLoading={isLoading} />
-          </div>
-        </div>
-      </main>
-        
-        <SourceViewer 
-            source={activeSource}
-            highlightedQuote={highlightedQuote}
-            onClose={() => setActiveSourceId(null)}
-        />
 
-      <LiveQuestionModal
-        isOpen={isLiveQuestionModalOpen}
-        onClose={() => {
-            setIsLiveQuestionModalOpen(false);
-            if (resumeAfterIdRef.current) {
-                handlePlayFullPodcast(resumeAfterIdRef.current);
-            }
-        }}
-        onSubmit={handleSubmitLiveQuestion}
-        isLoading={isLiveQuestionLoading}
-      />
-      <CreditModal
-        isOpen={isCreditModalOpen}
-        onClose={() => setIsCreditModalOpen(false)}
-        onGoToStore={() => {
-            setIsCreditModalOpen(false);
-            onNavigate('credit_store');
-        }}
-      />
+          <div className="flex items-center gap-5">
+            <div className="rounded-3xl border border-white/10 bg-white/5 px-5 py-4 text-left backdrop-blur-xl">
+              <p className="text-xs uppercase tracking-[0.3em] text-white/50">Session vibe</p>
+              <p className="mt-1 text-lg font-semibold text-white">{sessionVibe}</p>
+              <p className="mt-2 text-sm text-white/60">Gemini adapts tone live based on your prompts.</p>
+            </div>
+            <button
+              onClick={toggleMic}
+              className={`relative flex h-14 w-14 items-center justify-center rounded-full border border-white/10 transition-all duration-300 ${
+                micActive
+                  ? 'bg-gradient-to-br from-cyan-400/80 via-blue-500/60 to-indigo-500/70 shadow-[0_0_35px_rgba(6,182,212,0.45)]'
+                  : 'bg-white/5 hover:bg-white/10'
+              }`}
+            >
+              <MicIcon className={`h-6 w-6 ${micActive ? 'text-white' : 'text-white/70'}`} />
+              {micActive && (
+                <span className="absolute inset-0 -z-10 animate-pulse-slow rounded-full border border-cyan-300/20" />
+              )}
+            </button>
+          </div>
+        </header>
+
+        <main className="flex flex-1 flex-col gap-6 px-8 pb-36 lg:flex-row">
+          <section className="flex-1 overflow-hidden rounded-[32px] border border-white/10 bg-[rgba(7,12,26,0.75)] p-6 shadow-[0_0_50px_rgba(12,26,64,0.35)] backdrop-blur-xl">
+            <div className="flex h-full flex-col">
+              <div className="flex items-center justify-between border-b border-white/5 pb-4">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.3em] text-white/50">Live transcription</p>
+                  <p className="text-lg font-semibold text-white">Realtime conversation feed</p>
+                </div>
+                <div className="flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white/70 backdrop-blur-xl">
+                  <PauseIcon className="h-4 w-4" />
+                  Auto-captions on
+                </div>
+              </div>
+
+              <div className="mt-6 flex-1 space-y-6 overflow-y-auto pr-4">
+                {messages.map(message => (
+                  <MessageBubble
+                    key={message.id}
+                    message={message}
+                    isAssistant={message.role === 'assistant'}
+                  />
+                ))}
+
+                {isStreaming && <StreamingBubble content={streamedAssistantText} />}
+
+                <div ref={chatEndRef} />
+              </div>
+            </div>
+          </section>
+
+          <aside className="lg:w-[28rem] xl:w-[30rem]">
+            <div className="space-y-6">
+              <div className="rounded-[28px] border border-white/10 bg-white/5 p-6 backdrop-blur-xl">
+                <p className="text-xs uppercase tracking-[0.3em] text-white/50">Session status</p>
+                <div className="mt-3 flex items-center gap-3">
+                  <span className={`flex h-3 w-3 rounded-full ${
+                    sessionStatus === 'Listening'
+                      ? 'bg-emerald-400'
+                      : sessionStatus === 'Processing'
+                      ? 'bg-amber-300'
+                      : sessionStatus === 'Reconnecting…'
+                      ? 'bg-rose-400'
+                      : 'bg-cyan-300'
+                  }`} />
+                  <p className="text-base font-semibold text-white">{sessionStatus}</p>
+                </div>
+                <p className="mt-3 text-sm text-white/65">
+                  Gemini Live mirrors the conversational flow of Google’s experience with adaptive tone, quick follow-ups, and summary building that updates every turn.
+                </p>
+              </div>
+
+              <div className="rounded-[28px] border border-white/10 bg-white/5 p-6 backdrop-blur-xl">
+                <p className="text-xs uppercase tracking-[0.3em] text-white/50">Highlights</p>
+                <ul className="mt-4 space-y-3 text-sm text-white/80">
+                  {highlights.map((highlight, index) => (
+                    <li key={index} className="flex items-start gap-3">
+                      <span className="mt-1 inline-flex h-2 w-2 flex-shrink-0 rounded-full bg-cyan-300" />
+                      <span>{highlight}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                {metrics.map(metric => (
+                  <div
+                    key={metric.title}
+                    className="rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-white/70 backdrop-blur-xl"
+                  >
+                    <div className="flex items-center gap-3">
+                      <metric.icon className="h-4 w-4 text-cyan-200" />
+                      <p className="text-xs uppercase tracking-[0.3em] text-white/50">{metric.title}</p>
+                    </div>
+                    <p className="mt-2 text-2xl font-semibold text-white">{metric.value}</p>
+                    <p className="mt-1 text-xs text-white/60">{metric.caption}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </aside>
+        </main>
+
+        <footer className="pointer-events-none fixed inset-x-0 bottom-0 z-20 flex justify-center pb-8">
+          <div className="pointer-events-auto w-full max-w-5xl rounded-[32px] border border-white/10 bg-[rgba(7,12,26,0.9)] p-6 shadow-[0_20px_60px_rgba(0,0,0,0.35)] backdrop-blur-2xl">
+            <div className="flex flex-wrap gap-2">
+              {suggestions.map(suggestion => (
+                <button
+                  key={suggestion}
+                  onClick={() => handleSuggestionClick(suggestion)}
+                  className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white/80 transition hover:border-cyan-400/40 hover:text-white"
+                >
+                  {suggestion}
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-4 flex items-end gap-4">
+              <button
+                onClick={toggleMic}
+                className={`flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-full border transition ${
+                  micActive
+                    ? 'border-cyan-400/60 bg-cyan-400/20 text-white shadow-[0_0_25px_rgba(34,211,238,0.35)]'
+                    : 'border-white/10 bg-white/5 text-white/70 hover:bg-white/10'
+                }`}
+              >
+                <MicIcon className="h-6 w-6" />
+              </button>
+
+              <div className="flex-1 rounded-3xl border border-white/10 bg-white/5 p-3 backdrop-blur-xl">
+                <textarea
+                  ref={inputRef}
+                  value={inputValue}
+                  onChange={event => {
+                    setInputValue(event.target.value);
+                    handleTextareaResize(event.target);
+                  }}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Talk to Gemini Live…"
+                  rows={1}
+                  className="max-h-40 w-full resize-none border-none bg-transparent text-base text-white placeholder:text-white/40 focus:outline-none"
+                />
+              </div>
+
+              <button
+                onClick={() => handleSendMessage()}
+                disabled={isProcessing || (!inputValue.trim() && !pendingAssistant && !isStreaming)}
+                className={`flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-full border transition ${
+                  isProcessing
+                    ? 'border-white/10 bg-white/5 text-white/40'
+                    : 'border-cyan-400/60 bg-gradient-to-br from-cyan-400 via-blue-500 to-indigo-500 text-white shadow-[0_0_25px_rgba(59,130,246,0.35)] hover:scale-[1.02]'
+                }`}
+              >
+                <SendIcon className="h-5 w-5" />
+              </button>
+            </div>
+
+            {(isProcessing || isStreaming) && (
+              <div className="mt-4 flex items-center gap-2 text-sm text-white/60">
+                <span className="inline-flex h-2.5 w-2.5 animate-ping-slow rounded-full bg-cyan-300" />
+                Gemini is composing a live response…
+              </div>
+            )}
+          </div>
+        </footer>
+      </div>
+
+      <style>{`
+        .live-streaming-text {
+          background: linear-gradient(90deg, rgba(125, 211, 252, 0.85), rgba(192, 132, 252, 0.85));
+          -webkit-background-clip: text;
+          color: transparent;
+          animation: shimmer 1.2s linear infinite;
+        }
+        @keyframes shimmer {
+          0% {
+            filter: brightness(0.9);
+          }
+          50% {
+            filter: brightness(1.3);
+          }
+          100% {
+            filter: brightness(0.9);
+          }
+        }
+        @keyframes pulse-slow {
+          0%, 100% {
+            transform: scale(0.95);
+            opacity: 0.6;
+          }
+          50% {
+            transform: scale(1.05);
+            opacity: 1;
+          }
+        }
+        .animate-pulse-slow {
+          animation: pulse-slow 2.4s ease-in-out infinite;
+        }
+        @keyframes ping-slow {
+          0% {
+            transform: scale(0.95);
+            opacity: 0.75;
+          }
+          75% {
+            transform: scale(1.4);
+            opacity: 0;
+          }
+          100% {
+            opacity: 0;
+          }
+        }
+        .animate-ping-slow {
+          animation: ping-slow 2.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+        }
+      `}</style>
     </div>
   );
 };
